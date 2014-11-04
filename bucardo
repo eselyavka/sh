@@ -1,0 +1,301 @@
+#!/bin/sh
+
+### BEGIN INIT INFO
+# Provides:             bucardo
+# Required-Start:       $local_fs $remote_fs $network $time
+# Required-Stop:        $local_fs $remote_fs $network $time
+# Should-Start:         $syslog
+# Should-Stop:          $syslog
+# Default-Start:        2 3 4 5
+# Default-Stop:         0 1 6
+# Short-Description:    Bucardo asynchronous replication system
+### END INIT INFO
+
+BucExec='/usr/local/bin/bucardo_ctl'
+BucPidFile='/var/run/bucardo/bucardo.mcp.pid'
+BucStopFile='/var/run/bucardo/fullstopbucardo'
+DbHostList='db1.example.com db2.example.com db3.example.com'
+MasterHost=''
+
+# Set debug on/off for Bucardo
+debug='on' # default
+debugdir='/var/log/bucardo'
+out='/var/log/bucardo/bucardo.out'
+
+master_ip ()
+{
+  for host in $DbHostList
+  do
+    psql -U postgres -h $host -p 5432 -d template1 -c 'SELECT 1' >> $out 2>&1
+    res=$?
+    if [ $res -eq 0 ]
+    then
+      psql -U postgres -h $host -p 5432 -d template1 -c 'CREATE TABLE test ( a int ); DROP TABLE test' >> $out 2>&1
+      res=$?
+      if [ $res -eq 0 ]
+      then
+        MasterHost=$host
+        break
+      fi
+    fi
+  done
+}
+
+removeitem ()
+{
+  if [ ! -z "$1" ]
+  then
+    $BucExec list $1 > /dev/null
+    Out=$? 
+    if [ $Out -ne 0 ]
+    then
+      $BucExec list $1  
+    else
+      ArrItems=`$BucExec list $1 | cut -d ' ' -f 2`
+      for sync in $ArrItems
+      do
+        $BucExec remove $1 $sync
+      done
+    fi
+    else
+      echo 'Dismiss argument in function remove item'
+    exit 1	  
+  fi
+}
+
+usage ()
+{
+  printf '%s <start|stop|restart|status>\n' $0
+  exit 1
+}
+
+status_bucardo ()
+{
+
+  if [ -e $BucPidFile -a ! -e $BucStopFile ]
+  then
+    return 0
+  else
+    return 1
+  fi
+}
+
+check_user ()
+{
+  RootUser=`echo $1 | grep -i 'root'`
+
+  if [ ! -z $RootUser ]
+  then
+    return 0
+  else
+    return 1
+  fi
+}
+
+cleanup_bucardo ()
+{
+  if [ -e $BucPidFile ]
+  then
+    kill -9 `head -1 $BucPidFile` > /dev/null 2>&1
+  fi 
+}
+
+remove_bucardo_sync ()
+{
+  echo '----------Section[Removing all sync]----------' >> $out 2>&1
+  removeitem sync >> $out 2>&1
+  echo '----------End[Removing all sync]----------' >> $out 2>&1
+
+  echo '----------Section[Removing all herd]----------' >> $out 2>&1
+  removeitem herd >> $out 2>&1
+  echo '----------End[Removing all herd]----------' >> $out 2>&1
+
+  echo '----------Section[Removing all table]----------' >> $out 2>&1
+  removeitem table >> $out 2>&1 
+  echo '----------End[Removing all table]----------' >> $out 2>&1
+
+  echo '----------Section[Removing all dbs]----------' >> $out 2>&1
+  removeitem db >> $out 2>&1 && echo 'All sync removed' 
+  echo '----------End[Removing all dbs]----------' >> $out 2>&1
+}
+
+fill_bucardo ()
+{
+  master_ip
+  if [ ! -z $MasterHost ]
+  then
+    echo '----------Section[Add dbs]----------' >> $out 2>&1
+    $BucExec add db backoffice name=backoffice_db_msk host=msk-db1.example.com >> $out 2>&1
+    $BucExec add db backoffice name=backoffice_db_spb host=$MasterHost >> $out 2>&1
+    $BucExec add db catalog_alpha name=catalog_db_msk host=msk-db1.example.com >> $out 2>&1
+    $BucExec add db catalog_alpha name=catalog_db_spb host=$MasterHost >> $out 2>&1
+    $BucExec add db context name=context_db_msk host=msk-db1.example.com >> $out 2>&1
+    $BucExec add db context name=context_db_spb host=$MasterHost >> $out 2>&1
+    $BucExec add db ba name=ba_db_msk host=msk-db1.example.com >> $out 2>&1
+    $BucExec add db ba name=ba_db_spb host=ba-prod-db-1.scartel.dc >> $out 2>&1
+    echo '----------End[Add dbs]----------' >> $out 2>&1
+
+    echo '----------Section[Add table and herd]----------' >> $out 2>&1
+    $BucExec add all tables db=backoffice_db_spb --herd=backoffice_herd --verbose >> $out 2>&1
+    $BucExec add all tables db=catalog_db_spb --herd=catalog_herd --verbose >> $out 2>&1
+    $BucExec add all tables db=context_db_spb --herd=context_herd --verbose >> $out 2>&1
+    $BucExec add all tables db=ba_db_spb --herd=ba_herd --verbose >> $out 2>&1
+    echo '----------End[Add table]----------' >> $out 2>&1
+ 
+    echo '----------Section[Update table bucardo.goat]----------' >> $out 2>&1
+    psql -qAt -U bucardo -h 127.0.0.1 -d bucardo -c "UPDATE bucardo.goat set standard_conflict='source'" >> $out 2>&1
+    echo '----------End[Update table bucardo.goat]----------' >> $out 2>&1
+
+    echo '----------Section[Add sync]----------' >> $out 2>&1
+    $BucExec add sync backoffice_sync source=backoffice_herd targetdb=backoffice_db_msk type=swap >> $out 2>&1
+    $BucExec add sync catalog_sync source=catalog_herd targetdb=catalog_db_msk type=swap >> $out 2>&1
+    $BucExec add sync context_sync source=context_herd targetdb=context_db_msk type=swap >> $out 2>&1
+    $BucExec add sync ba_sync source=ba_herd targetdb=ba_db_msk type=swap >> $out 2>&1
+    echo '----------End[Add table]----------' >> $out 2>&1
+  else
+    echo "Can't detect master host exiting"
+    exit 1
+  fi
+}
+
+stop_bucardo ()
+{
+  status_bucardo
+
+  if [ $? -eq 0 ]
+  then
+    CurrUser=`id`
+    check_user $CurrUser
+    result=$?
+
+    if [ $result -eq 0 ]
+    then
+      echo '----------Section[Stoping bucardo]----------' >> $out 2>&1
+      $BucExec stop 'init.d stop' >> $out 2>&1
+    else
+      printf 'Please run script %s as root\n' $0
+      exit 1
+    fi
+
+    if [ $? -eq 0 ]
+    then
+      if [ -e $BucStopFile ]
+      then
+        echo 'Bucardo succefully stoped, removing sync...'
+      else
+        printf 'Something going wrong no file %s found exiting...' $BucStopFile
+        exit 1
+      fi
+    else
+      echo 'Stoping error exiting...'
+      exit 1
+    fi
+    echo '----------End[Stoping bucardo]----------' >> $out 2>&1 
+   
+    remove_bucardo_sync
+  else
+    echo 'Bucardo already stoped, removing sync...'
+    remove_bucardo_sync
+    exit 1
+  fi
+}
+
+start_bucardo ()
+{
+  status_bucardo
+  
+  if [ $? -ne 0 ]
+  then
+    if [ $debug = 'off' ]
+    then
+      CurrUser=`id`
+      check_user $CurrUser
+      result=$?
+
+      if [ $result -eq 0 ]
+      then
+        fill_bucardo
+        echo '----------Section[Starting bucardo]----------' >> $out 2>&1
+        $BucExec --debugfile=0 start 'init.d start' >> $out 2>&1
+      else
+        printf 'Please run script %s as root\n' $0
+        exit 1
+      fi
+
+      if [ $? -eq 0 ]
+      then
+        echo 'Bucardo start'
+      else
+        echo 'Bucardo not start'
+        exit 1
+      fi
+    else
+      if [ -d $debugdir ]
+      then
+        CurrUser=`id`
+        check_user $CurrUser 
+        result=$?
+
+        if [ $result -eq 0 ]
+        then
+          rm -f $out
+          fill_bucardo
+          echo '----------Section[Starting bucardo]----------' >> $out 2>&1
+          $BucExec --debugdir=$debugdir start 'init.d start' >> $out 2>&1
+        else
+          printf 'Please run script %s as root\n' $0
+          exit 1
+        fi
+
+        if [ $? -eq 0 ]
+        then
+          echo 'Bucardo start'
+        else
+          echo 'Bucardo not start'
+          exit 1
+        fi
+      else
+        printf '%s no such directory\nBucardo not start' $debugdir
+        exit 1
+      fi
+    fi
+    echo '----------End[Starting bucardo]----------' >> $out 2>&1
+  else
+    echo 'Bucardo already started...'
+    exit 1
+  fi
+}
+
+if [ -z $1 ]
+then
+  usage
+elif [ $1 = 'stop' ]
+then
+  rm -f $out
+  stop_bucardo 
+  exit 0
+elif [ $1 = 'start' ]
+then
+  rm -f $out
+  cleanup_bucardo
+  start_bucardo
+  exit 0
+elif [ $1 = 'restart' ]
+then
+  rm -f $out
+  stop_bucardo
+  sleep 5
+  cleanup_bucardo
+  start_bucardo
+  exit 0
+elif [ $1 = 'status' ]
+then
+  status_bucardo
+  if [ $? -eq 0 ]
+  then
+    BucPid=`head -1 $BucPidFile`
+    printf 'Bucardo is running pid: %s\n' $BucPid
+  else
+    echo 'Bucardo not run'
+  fi
+fi
