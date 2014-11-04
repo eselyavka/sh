@@ -1,0 +1,8 @@
+#Hbase hosts
+HBASE="hadoop-nn1.example.com hadoop-nn2.example.com"
+RS="hadoop-dn1.example.com hadoop-dn2.example.com hadoop-dn3.example.com hadoop-dn4.example.com hadoop-dn5.example.com hadoop-dn6.example.com"
+ZK="hadoop-nn2.example.com hadoop-dn1.example.com hadoop-dn5.example.com"
+
+#Hadoop hosts
+TT="hadoop-dn1.example.com hadoop-dn2.example.com hadoop-dn3.example.com hadoop-dn4.example.com hadoop-dn5.example.com hadoop-dn6.example.com"
+DN="hadoop-dn1.example.com hadoop-dn2.example.com hadoop-dn3.example.com hadoop-dn4.example.com hadoop-dn5.example.com hadoop-dn6.example.com"
