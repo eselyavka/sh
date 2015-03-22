@@ -1,0 +1,78 @@
+#/bin/bash
+
+# chkconfig: - 62 38
+
+# description: mount ramdisk before starting postgresql \
+#              for postgresql stat file
+
+. /etc/init.d/functions
+
+USER='postgres'
+GROUP='postgres'
+RAM_DISK_DEVICE='/dev/ram0'
+MOUNT_POINT='/ramdisk'
+STAT_DIR='pg_stat_tmp'
+
+status() {
+        DISK_STATUS=`mount | grep -i "$RAM_DISK_DEVICE"`
+        if [ -z "$DISK_STATUS" ]
+        then
+            echo "Ramdis is not initialized"
+            return 1
+        else
+            echo "Ramdisk is initialized"
+            return 0
+        fi
+}
+
+start() {
+        status > /dev/null
+        RES=$?
+        if [ $RES -eq 1 ]
+        then
+            echo "Starting ramdisk initialization"
+            /sbin/mkfs.ext4 -m 0 $RAM_DISK_DEVICE > /dev/null 2>&1
+            /bin/mkdir $MOUNT_POINT > /dev/null 2>&1
+            /bin/mount $RAM_DISK_DEVICE $MOUNT_POINT
+            /bin/mkdir -p ${MOUNT_POINT}/${STAT_DIR}
+            /bin/chown ${USER}.${GROUP} ${MOUNT_POINT}/${STAT_DIR}
+            /bin/chmod 0700 ${MOUNT_POINT}/${STAT_DIR}
+            return 0
+        else
+            return 1
+        fi 
+}
+
+stop() {
+        status > /dev/null
+        RES=$?
+        if [ $RES -eq 1 ]
+        then
+            return 1
+        else
+            echo "Uninitialize ramdisk"
+            /bin/umount $MOUNT_POINT
+            return 0
+        fi
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        start
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage: ramdisk {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+exit $?
